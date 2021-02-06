@@ -96,6 +96,13 @@ class Batcher:
             X, y = zip(*batch)
             yield X, y
 
+    @property
+    def inv_word_dict(self):
+        if not (hasattr(self, "_inv_word_dict") and len(self._inv_word_dict) == len(self.word_dict)):
+            w, i = zip(*self.word_dict.items())
+            self._inv_word_dict = dict(zip(i, w))
+        return self._inv_word_dict
+
     def save_worddict(self):
         pickle.dump(self.word_dict, open("word_dict.pkl", "wb"))
 
@@ -105,22 +112,31 @@ class LightGBMDecisionTree:
     def __init__(self, num_class):
         self.params = {
             'objective': 'multiclass',
+            # 'boosting': 'rf',
             # 'bagging_freq': 0,
             # 'categorical_feature': list(range(MAX_LEN)),
             # 'boost_from_average': True,
-            # 'num_leaves': 5,
+            'num_leaves': 50000,
+            'min_data_in_leaf': 1,
+            # 'extra_trees': 'true',
+            # 'max_bin': 100,
             'num_class': num_class
         }
         
-    def train(self, lgb_train):
+    def train(self, lgb_train, init_model=None):
         self.gbm = lgb.train(
             self.params, 
             lgb_train, 
             num_boost_round=1,
-            categorical_feature='auto')
+            categorical_feature='auto',
+            init_model=init_model
+        )
     
     def predict(self, X):
         return self.gbm.predict(X)
+
+    def save(self, path):
+        pickle.dump(self, open(path, "wb"))
 
 
 def main(args):
@@ -133,12 +149,24 @@ def main(args):
     if not os.path.isdir("trees"):
         os.mkdir("trees")
 
+    batches_per_tree = 5
+
     try:
+        prev_tree = None
         for X, y in tqdm(batcher):
             data = lgb.Dataset(np.array(X), label=np.array(y))
 
             tree = LightGBMDecisionTree(num_class=batcher.num_classes)
-            tree.train(data)
+            tree.train(data, init_model=prev_tree)
+
+            # prev_tree = tree
+
+            # s = 0; T = (X)[s]
+            # p = (T + [np.argmax(tree.predict(np.array(T).reshape(1,-1)))])[1:]; print([batcher.inv_word_dict[w] for w in p]); T = p
+            # np.flip(np.argsort(tree.predict(np.array(T).reshape(1, -1))))
+
+            tree.save(f"trees/lm_{tree_count}.pkl")
+            del tree
 
             tree_count += 1
             total_processed += len(X)
@@ -155,5 +183,8 @@ if __name__ == "__main__":
     parser.add_argument("wiki_path")
 
     args = parser.parse_args()
+
+    import logging
+    logger = logging.basicConfig(level=logging.ERROR)
 
     main(args)
